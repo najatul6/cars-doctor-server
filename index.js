@@ -1,13 +1,19 @@
 const express = require('express');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
 const app = express();
 const port = process.env.PORT || 5000;
 
 // middle Ware 
-app.use(cors())
+app.use(cors({
+  origin: ['http://localhost:5173'],
+  credentials: true
+}))
 app.use(express.json())
+app.use(cookieParser())
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.trhzw6v.mongodb.net/?retryWrites=true&w=majority`;
 
@@ -20,6 +26,22 @@ const client = new MongoClient(uri, {
   }
 });
 
+// My MiddleWare 
+const verifyToken = async(req, res, next)=>{
+  const token = req.cookies?.token;
+  if(!token){
+    return res.status(401).send({message: 'Not Authorization'})
+  }
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET,(err,decoded) =>{
+    if(err){
+      return res.status(401).send({message: 'Unauthorized'})
+    }
+    
+    req.user = decoded
+    next()
+  })
+}
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -28,6 +50,22 @@ async function run() {
     const serviceCollection = client.db('carDoctorsDB').collection('services');
     const ordersCollection = client.db('carDoctorsDB').collection('orders');
 
+    // Auth Related API 
+    app.post('/jwt', async (req, res) => {
+      const user = req.body;
+      console.log(user);
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+      console.log(token)
+
+      res
+        .cookie('token', token, {
+          httpOnly: true,
+          secure: false,
+        })
+        .send({ success: true })
+    })
+
+    // Services Related  API
     app.get('/services', async (req, res) => {
       const cursor = serviceCollection.find();
       const result = await cursor.toArray();
@@ -42,7 +80,10 @@ async function run() {
     })
 
     // Order Section 
-    app.get('/orders', async (req, res) => {
+    app.get('/orders',verifyToken, async (req, res) => {
+      if(req.query.email !==req.user.email){
+        return res.status(403).send({message: 'Forbidden Access'})
+      }
       let query = {};
       if (req.query?.email) {
         query = { email: req.query.email }
@@ -60,8 +101,8 @@ async function run() {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) }
       const updatedOrders = req.body;
-      const updateDoc={
-        $set:{
+      const updateDoc = {
+        $set: {
           status: updatedOrders.status
         }
       };
